@@ -1,11 +1,7 @@
 package App;
 
-import dao.BudgetDAO;
-import dao.ExpenseDAO;
-import dao.CategoryDAO;
-import dao.UserDAO;
-import model.User;
-import model.Session;
+import dao.*;
+import model.*;
 import service.BudgetService;
 import javafx.application.Application;
 import javafx.collections.FXCollections;
@@ -18,6 +14,7 @@ import javafx.scene.chart.PieChart;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -28,6 +25,7 @@ public class MainApp extends Application {
     private BudgetDAO budgetDAO = new BudgetDAO();
     private ExpenseDAO expenseDAO = new ExpenseDAO();
     private CategoryDAO categoryDAO = new CategoryDAO();
+    private ProductDAO productDAO = new ProductDAO(); // Nouveau DAO pour les produits
     private BudgetService budgetService = new BudgetService();
 
     // --- Éléments d'interface ---
@@ -70,7 +68,6 @@ public class MainApp extends Application {
         Hyperlink registerLink = new Hyperlink("Pas encore de compte ? S'inscrire ici");
 
         loginBtn.setOnAction(e -> {
-            // userDAO.login() contient déjà la logique de hachage du mot de passe
             User user = userDAO.login(emailField.getText(), passField.getText());
             if (user != null) {
                 Session.setLoggedInUser(user);
@@ -121,35 +118,25 @@ public class MainApp extends Application {
             String email = emailField.getText();
             String password = passField.getText();
 
-            // 1. Validation de base
             if (name.isEmpty() || email.isEmpty() || password.isEmpty()) {
                 showError("Veuillez remplir tous les champs.");
                 return;
             }
 
-            // 2. Vérification email existant (Amélioration UX)
             if (userDAO.isEmailExists(email)) {
-                showError("Cet email est déjà utilisé par un autre compte !");
+                showError("Cet email est déjà utilisé !");
                 return;
             }
 
-            // 3. Enregistrement (le hachage se fait dans le DAO)
             User newUser = new User(name, email, password);
             if (userDAO.register(newUser)) {
-                Alert alert = new Alert(Alert.AlertType.INFORMATION);
-                alert.setTitle("Succès");
-                alert.setHeaderText(null);
-                alert.setContentText("Votre compte a été créé avec succès ! Connectez-vous maintenant.");
-                alert.showAndWait(); // On attend que l'utilisateur clique sur OK
-
                 showLoginScene();
             } else {
-                showError("Erreur lors de l'inscription. Réessayez plus tard.");
+                showError("Erreur lors de l'inscription.");
             }
         });
 
         backLink.setOnAction(e -> showLoginScene());
-
         root.getChildren().addAll(title, nameField, emailField, passField, regBtn, backLink);
         primaryStage.setScene(new Scene(root, 1150, 850));
     }
@@ -157,30 +144,21 @@ public class MainApp extends Application {
     // --- TABLEAU DE BORD (DASHBOARD) ---
     public void showDashboard() {
         User currentUser = Session.getLoggedInUser();
-        if (currentUser == null) {
-            showLoginScene();
-            return;
-        }
+        if (currentUser == null) { showLoginScene(); return; }
 
         lblWelcome = new Label("Bienvenue, " + currentUser.getName() + " !");
-        lblWelcome.setStyle("-fx-font-size: 14px; -fx-text-fill: #7f8c8d;");
-
         Label titleLabel = new Label("📊 Smart Shopping Advisor - Dashboard");
         titleLabel.setStyle("-fx-font-size: 28px; -fx-font-weight: bold; -fx-text-fill: #2c3e50;");
 
         Button logoutBtn = new Button("🚪 Déconnexion");
-        logoutBtn.setOnAction(e -> {
-            Session.logout();
-            showLoginScene();
-        });
+        logoutBtn.setOnAction(e -> { Session.logout(); showLoginScene(); });
 
-        // --- Stats Cards ---
+        // --- Cartes Statistiques ---
         lblBudget = new Label();
         lblExpenses = new Label();
         lblRemaining = new Label();
 
         Button btnEditBudget = new Button("✏️ Modifier");
-        btnEditBudget.setStyle("-fx-font-size: 10px;");
         btnEditBudget.setOnAction(e -> handleUpdateBudget());
 
         VBox budgetCard = createStatCard("Budget Total", lblBudget, "#3498db");
@@ -193,10 +171,15 @@ public class MainApp extends Application {
         );
         statsLayout.setAlignment(Pos.CENTER);
 
+        // --- Bouton d'ajout de dépense ---
+        Button btnAddExpense = new Button("➕ Ajouter une dépense");
+        btnAddExpense.setStyle("-fx-background-color: #e67e22; -fx-text-fill: white; -fx-font-weight: bold; -fx-font-size: 14px;");
+        btnAddExpense.setOnAction(e -> handleAddExpense());
+
         progressBar = new ProgressBar(0);
         progressBar.setPrefWidth(700);
 
-        // --- Zone IA & Graphique ---
+        // --- Graphique & IA ---
         pieChart = new PieChart();
         pieChart.setPrefWidth(450);
 
@@ -209,14 +192,30 @@ public class MainApp extends Application {
 
         aiResultArea = new TextArea();
         aiResultArea.setPrefSize(450, 300);
-        aiResultArea.setWrapText(true);
         aiResultArea.setEditable(false);
+        aiResultArea.setWrapText(true);
 
         Button aiButton = new Button("🤖 Lancer l'Analyse IA");
         aiButton.setStyle("-fx-background-color: #9b59b6; -fx-text-fill: white; -fx-font-weight: bold;");
 
         ProgressIndicator loading = new ProgressIndicator();
         loading.setVisible(false);
+
+        aiButton.setOnAction(e -> {
+            loading.setVisible(true);
+            aiButton.setDisable(true);
+            Task<String> task = new Task<>() {
+                @Override protected String call() {
+                    return budgetService.getAIAdviceForGUI(currentUser.getId(), comboLanguage.getValue());
+                }
+            };
+            task.setOnSucceeded(ev -> {
+                aiResultArea.setText(task.getValue());
+                loading.setVisible(false);
+                aiButton.setDisable(false);
+            });
+            new Thread(task).start();
+        });
 
         aiBox.getChildren().addAll(new Label("Choisir la langue :"), comboLanguage, aiButton, loading, aiResultArea);
 
@@ -225,70 +224,75 @@ public class MainApp extends Application {
 
         refreshData();
 
-        aiButton.setOnAction(e -> {
-            aiButton.setDisable(true);
-            loading.setVisible(true);
-            aiResultArea.setText("🔄 Analyse en cours...");
-
-            Task<String> aiTask = new Task<>() {
-                @Override
-                protected String call() {
-                    return budgetService.getAIAdviceForGUI(currentUser.getId(), comboLanguage.getValue());
-                }
-            };
-
-            aiTask.setOnSucceeded(event -> {
-                aiResultArea.setText(aiTask.getValue());
-                loading.setVisible(false);
-                aiButton.setDisable(false);
-            });
-
-            aiTask.setOnFailed(event -> {
-                showError("Erreur lors de l'analyse IA.");
-                loading.setVisible(false);
-                aiButton.setDisable(false);
-            });
-
-            new Thread(aiTask).start();
-        });
-
-        VBox mainLayout = new VBox(20, logoutBtn, lblWelcome, titleLabel, statsLayout, progressBar, centralLayout);
+        VBox mainLayout = new VBox(20, logoutBtn, lblWelcome, titleLabel, statsLayout, btnAddExpense, progressBar, centralLayout);
         mainLayout.setPadding(new Insets(20));
         mainLayout.setAlignment(Pos.TOP_CENTER);
 
-        primaryStage.setTitle("Smart Shopping Advisor v1.0 - " + currentUser.getName());
         primaryStage.setScene(new Scene(mainLayout, 1150, 850));
+    }
+
+    // --- LOGIQUE D'AJOUT DE DÉPENSE ---
+    private void handleAddExpense() {
+        List<Product> products = productDAO.getAllProducts();
+        if (products.isEmpty()) {
+            showError("Aucun produit disponible en base.");
+            return;
+        }
+
+        ChoiceDialog<Product> dialog = new ChoiceDialog<>(products.get(0), products);
+        dialog.setTitle("Nouvelle Dépense");
+        dialog.setHeaderText("Sélectionnez un article");
+        dialog.setContentText("Produit :");
+
+        Optional<Product> result = dialog.showAndWait();
+        result.ifPresent(product -> {
+            TextInputDialog qtyDialog = new TextInputDialog("1");
+            qtyDialog.setTitle("Quantité");
+            qtyDialog.setHeaderText("Combien d'unités de " + product.getName() + " ?");
+            qtyDialog.setContentText("Quantité :");
+
+            qtyDialog.showAndWait().ifPresent(qtyStr -> {
+                try {
+                    int qty = Integer.parseInt(qtyStr);
+                    double total = product.getPrice() * qty;
+
+                    expenseDAO.addExpense(new Expense(
+                            Session.getLoggedInUser().getId(),
+                            product.getId(),
+                            qty,
+                            total
+                    ));
+                    refreshData();
+                } catch (NumberFormatException e) {
+                    showError("Quantité invalide.");
+                }
+            });
+        });
     }
 
     private void handleUpdateBudget() {
         TextInputDialog dialog = new TextInputDialog();
-        dialog.setTitle("Mise à jour");
+        dialog.setTitle("Budget");
         dialog.setHeaderText("Nouveau budget mensuel (DH) :");
-        Optional<String> result = dialog.showAndWait();
-        result.ifPresent(amount -> {
+        dialog.showAndWait().ifPresent(amount -> {
             try {
-                double val = Double.parseDouble(amount);
-                budgetService.updateAndRefreshBudget(Session.getLoggedInUser().getId(), val);
+                budgetService.updateAndRefreshBudget(Session.getLoggedInUser().getId(), Double.parseDouble(amount));
                 refreshData();
-            } catch (NumberFormatException e) {
-                showError("Montant invalide !");
-            }
+            } catch (Exception e) { showError("Montant invalide."); }
         });
     }
 
     private void refreshData() {
-        if (Session.getLoggedInUser() == null) return;
-
         int uid = Session.getLoggedInUser().getId();
         double budgetTotal = budgetDAO.getBudgetByUserId(uid);
         double depensesTotales = expenseDAO.getTotalExpenses(uid);
         double reste = budgetTotal - depensesTotales;
-        double ratio = (budgetTotal > 0) ? (depensesTotales / budgetTotal) : 0;
 
         lblBudget.setText(String.format("%.2f DH", budgetTotal));
         lblExpenses.setText(String.format("%.2f DH", depensesTotales));
         lblRemaining.setText(String.format("%.2f DH", reste));
-        progressBar.setProgress(ratio);
+        progressBar.setProgress(budgetTotal > 0 ? depensesTotales / budgetTotal : 0);
+
         updatePieChartData();
     }
 
@@ -304,16 +308,13 @@ public class MainApp extends Application {
         card.setPadding(new Insets(15));
         card.setPrefWidth(250);
         card.setAlignment(Pos.CENTER);
-        card.setStyle("-fx-background-color: " + color + "; -fx-background-radius: 10; -fx-text-fill: white; -fx-font-weight: bold;");
+        card.setStyle("-fx-background-color: " + color + "; -fx-background-radius: 10; -fx-text-fill: #ffffff; -fx-font-weight: bold;");
         return card;
     }
 
     private void showError(String msg) {
-        Alert alert = new Alert(Alert.AlertType.ERROR, msg);
-        alert.show();
+        new Alert(Alert.AlertType.ERROR, msg).show();
     }
 
-    public static void main(String[] args) {
-        launch(args);
-    }
+    public static void main(String[] args) { launch(args); }
 }

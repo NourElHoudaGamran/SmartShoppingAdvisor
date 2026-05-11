@@ -31,7 +31,7 @@ public class AIService {
 
             // ✅ Construction JSON robuste
             JSONObject json = new JSONObject();
-            json.put("model", "llama3");
+            json.put("model", "gemma3:1b");
             json.put("prompt", fullPrompt);
             json.put("stream", false);
 

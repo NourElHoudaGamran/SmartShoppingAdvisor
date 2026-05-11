@@ -7,8 +7,8 @@ import java.sql.SQLException;
 public class DBConnection {
 
     private static final String URL = "jdbc:sqlserver://localhost\\SQLEXPRESS;databaseName=SmartShoppingDB;encrypt=true;trustServerCertificate=true;";
-    private static final String USER = "sa";
-    private static final String PASSWORD = "1234";
+    private static final String USER = "YOUR_USERNAME";
+    private static final String PASSWORD = "YOUR_PASSWORD";
 
     public static Connection getConnection() {
         try {
